@@ -2,24 +2,31 @@
 
 Local VM where an agent finishes your loose ends, inside a sandbox you control.
 
+## Start with the real pieces, already public and live
+- Runtime — the gatekeeper for your agents: https://runtime.meshtool.ai
+- Market — the live front door: https://market.meshtool.ai
+- Meshtool SDK — TypeScript SDK and CLI for the MeshTool API: https://github.com/Meshtool/meshtool-sdk
+- MeshMarket MCP — connect any MCP client to the Meshtool platform and MeshMarket exchange: https://github.com/Meshtool/meshmarket-mcp
+- Examples — copy-paste starters: https://github.com/Meshtool/examples
+
 ## One-line promise + demo clip
-Agents don’t log in anymore. They clock in — and finish the loose ends inside a VM you control.
+Agents don't log in anymore. They clock in — and finish the loose ends inside a VM you control.
 Demo clip: to be added — 60 seconds, no sound needed.
 
 ## Badges
 Build status, license, release, and Discord badges to be added once the first workflow and release exist. No badge is shown until it is real.
 
 ## Quickstart: one command
-Starter layout for now. The compose / VM setup file is not published in this repo yet, so do not run a quickstart from this README until that file lands.
+Starter layout for now. The VM setup file is not published in this repo yet, so do not run a quickstart from this README until that file lands.
 
 ```text
 docker compose up
 ```
 
-## What it can and can’t do
+## What it can and can't do
 Your differentiator: permissions, limits, what the sandbox blocked, audit trail.
 - It can: run agent work inside a sandbox you control, with grants instead of raw keys, and a receipt for what it did.
-- It can’t: run outside its grants, use a key it was not given, or hide what it did — the audit trail is the point.
+- It can't: run outside its grants, use a key it was not given, or hide what it did — the audit trail is the point.
 - Limits and blocked actions are listed here as the sandbox rules land, not before.
 
 ## Architecture diagram

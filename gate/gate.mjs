@@ -121,6 +121,28 @@ function readHead(file) {
   } catch { return GENESIS; }
 }
 
+// Append one record to a chained receipts file other than the gate's own (the shell
+// log). The gate is the only writer of its file and keeps its head in memory; these
+// files have several short-lived writers, so a directory lock keeps two of them from
+// forking the chain. A lock older than 10 s is taken to be a crashed writer's.
+export function appendChained(file, record, { lockWaitMs = 3000 } = {}) {
+  const lock = `${file}.lock`;
+  const deadline = Date.now() + lockWaitMs;
+  for (;;) {
+    try { fs.mkdirSync(lock); break; } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 10_000) fs.rmdirSync(lock); } catch { /* raced: fine */ }
+      if (Date.now() > deadline) throw new Error('receipt lock busy');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); // sleep 20 ms
+    }
+  }
+  try {
+    const line = JSON.stringify({ ts: new Date().toISOString(), ...record, prev: readHead(file) });
+    fs.appendFileSync(file, line + '\n');
+    return sha256Hex(line);
+  } finally { try { fs.rmdirSync(lock); } catch { /* already gone */ } }
+}
+
 // --- upstream proxy (cloud mode) --------------------------------------------------
 
 // "unix:/path" is a unix socket (no network exposure at all); anything else is

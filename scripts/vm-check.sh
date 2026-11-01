@@ -88,6 +88,20 @@ else
   fi
 fi
 
+# --- who touched the box -------------------------------------------------------------
+# Exit codes must survive the wrapper, and the receipt must tell the truth about them.
+rm -f receipts/shell.jsonl
+out=$(./scripts/vm-shell.sh -- id -u 2>/dev/null | tail -1)
+./scripts/vm-shell.sh -- bash -c 'exit 7' >/dev/null 2>&1; rc=$?
+if [[ "$out" == "1000" && "$rc" == "7" ]] \
+   && node scripts/verify-receipts.mjs receipts/shell.jsonl >/dev/null 2>&1 \
+   && [[ "$(grep -c '"kind":"shell-start"' receipts/shell.jsonl)" == "2" ]] \
+   && tail -1 receipts/shell.jsonl | grep -q '"kind":"shell-end".*"exit_code":7'; then
+  ok "a shell opened through vm-shell is receipted (start, end, true exit code) in its own hash chain"
+else
+  bad "vm-shell receipts" "output=$out exit=$rc; log: $(tail -2 receipts/shell.jsonl 2>/dev/null | cut -c1-160 | tr '\n' ' ')"
+fi
+
 # --- the audit trail -----------------------------------------------------------------
 # Last, so it covers everything above. Read the gate's live head first, then check
 # the file: if the tail was cut or a line edited, the live head is no longer in it.

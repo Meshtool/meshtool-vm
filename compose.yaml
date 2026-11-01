@@ -1,0 +1,61 @@
+# Meshtool VM — an agent's workspace with one way out.
+#
+#   sandbox ──(inside: no route out)──> gate ──(outside)──> allowlisted hosts
+#
+# The sandbox is on an `internal` network: even if a tool ignores the proxy
+# settings, there is no route to the internet. The gate is the only container
+# on both networks, and it decides and receipts every connection.
+name: meshtool-vm
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  gate:
+    <<: *hardened
+    build: ./gate
+    environment:
+      POLICY_FILE: /policy/allow.txt
+      RECEIPTS_FILE: /receipts/egress.jsonl
+      UPSTREAM_PROXY: ${UPSTREAM_PROXY:-}
+    volumes:
+      - ./policy:/policy:ro
+      - ./receipts:/receipts
+    networks: [inside, outside]
+    pids_limit: 64
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3128/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  sandbox:
+    <<: *hardened
+    build: ./sandbox
+    depends_on:
+      gate: { condition: service_healthy }
+    environment:
+      HTTPS_PROXY: http://gate:3128
+      HTTP_PROXY: http://gate:3128
+      https_proxy: http://gate:3128
+      http_proxy: http://gate:3128
+      NO_PROXY: ""
+      NODE_USE_ENV_PROXY: "1"
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /home/node:size=256m,uid=1000,gid=1000
+    volumes:
+      - ./work:/work
+    networks: [inside]
+    pids_limit: 512
+    mem_limit: 4g
+    cpus: 2
+
+networks:
+  inside:
+    internal: true
+  outside: {}

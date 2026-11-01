@@ -1,0 +1,6 @@
+.env
+receipts/*
+!receipts/.gitkeep
+work/*
+!work/.gitkeep
+node_modules/

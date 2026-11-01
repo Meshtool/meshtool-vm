@@ -1,0 +1,21 @@
+# Overlay for hosts whose only way out is a local HTTPS proxy that re-signs TLS
+# (cloud agent containers, some corporate laptops). scripts/docker-up.sh turns
+# it on by writing .env; on an ordinary machine it is never used.
+#
+# The gate chains its allowed tunnels to that proxy (through scripts/relay.mjs,
+# because containers cannot reach the host's 127.0.0.1), and the sandbox trusts
+# the proxy's CA. The gate's allowlist still decides first: the upstream proxy
+# can only narrow what the sandbox reaches, never widen it.
+services:
+  gate:
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  sandbox:
+    environment:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/meshtool-extra-ca.crt
+      SSL_CERT_FILE: /etc/ssl/certs/meshtool-extra-ca.crt
+      CURL_CA_BUNDLE: /etc/ssl/certs/meshtool-extra-ca.crt
+      GIT_SSL_CAINFO: /etc/ssl/certs/meshtool-extra-ca.crt
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/meshtool-extra-ca.crt
+      NPM_CONFIG_CAFILE: /etc/ssl/certs/meshtool-extra-ca.crt
+    volumes:
+      - ${EXTRA_CA_BUNDLE:?set by scripts/docker-up.sh}:/etc/ssl/certs/meshtool-extra-ca.crt:ro

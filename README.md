@@ -17,21 +17,56 @@ Demo clip: to be added — 60 seconds, no sound needed.
 Build status, license, release, and Discord badges to be added once the first workflow and release exist. No badge is shown until it is real.
 
 ## Quickstart: one command
-Starter layout for now. The VM setup file is not published in this repo yet, so do not run a quickstart from this README until that file lands.
+Needs Docker (Docker Desktop on Windows/macOS, Docker Engine on Linux) and Node 18+ on the host.
 
-```text
-docker compose up
+```bash
+./scripts/vm-up.sh
 ```
 
+That starts the Docker daemon if it isn't answering, builds the two containers, and waits until both are healthy. Then:
+
+```bash
+docker compose exec sandbox bash
+```
+
+```bash
+./scripts/vm-check.sh
+```
+
+`vm-check.sh` proves the walls from inside the sandbox and exits non-zero if any fails. Receipts land in `receipts/egress.jsonl`.
+
 ## What it can and can't do
-Your differentiator: permissions, limits, what the sandbox blocked, audit trail.
-- It can: run agent work inside a sandbox you control, with grants instead of raw keys, and a receipt for what it did.
-- It can't: run outside its grants, use a key it was not given, or hide what it did — the audit trail is the point.
-- Limits and blocked actions are listed here as the sandbox rules land, not before.
+Sandbox v0.1: one box, one way out, and a receipt for every attempt.
+- It can: work in `/work` (your folder, mounted), use git, Node, Python and a compiler, and reach the hosts in `policy/allow.txt` (npm, PyPI, GitHub, the Meshtool platform by default).
+- It can't: run as root, hold any Linux capability, write system files, escalate through setuid, reach a host not on the allowlist, connect to a raw IP, or get around the gate. The sandbox's network has no route out except the gate, so a tool that ignores the proxy settings simply has nowhere to go.
+- Fail closed: no policy, an empty policy, or a receipt that cannot be written means nothing gets out. A malformed policy line stops the gate from starting.
+- Limits: 2 CPUs, 4 GB memory, 512 processes, 1 GB `/tmp`. Edit `compose.yaml` to change them.
+- Not yet: grants instead of raw keys, and receipts for actions other than network egress. Those come with the Runtime wiring.
+
+Change the allowlist without a restart: edit `policy/allow.txt`, then `docker compose kill -s HUP gate`.
 
 ## Architecture diagram
-One picture: agent, sandbox, gate, receipts.
-Diagram to be added with the first real setup file.
+```text
+ your folder ──mount──> ┌──────────── sandbox ────────────┐
+                        │ uid 1000, read-only, no caps     │
+                        └──────────────┬───────────────────┘
+                     network "inside" (internal: no route out)
+                                       │
+                        ┌──────────── gate ───────────────┐   receipts/egress.jsonl
+                        │ allowlist, fail closed, receipts │──> one line per attempt
+                        └──────────────┬───────────────────┘
+                              network "outside"
+                                       │
+                               allowlisted hosts
+```
+
+On a host whose only exit is a local HTTPS proxy (a cloud agent container), `scripts/docker-up.sh` turns on `compose.cloud.yaml`. The gate chains to that proxy and the sandbox trusts its CA. The gate's allowlist still decides first.
+
+## Tests
+```bash
+node --test tests/gate.test.mjs
+```
+Zero dependencies, no Docker. Covers the policy, the real gate server, and both fail-closed paths.
 
 ## Roadmap + contributing
 Strangers need a door in. Good first issues will be labeled `good first issue` — three to start — once the first setup file is published. Do not claim issues exist before they do.

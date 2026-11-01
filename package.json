@@ -1,0 +1,14 @@
+{
+  "name": "meshtool-vm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An agent's workspace with one way out: a hardened sandbox behind a fail-closed, receipting egress gate.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test tests/gate.test.mjs",
+    "up": "./scripts/vm-up.sh",
+    "check": "./scripts/vm-check.sh",
+    "down": "docker compose down"
+  }
+}

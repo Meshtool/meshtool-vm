@@ -1,7 +1,7 @@
 # The box the agent works in. node:22-bookworm already carries git, curl, python3 and
 # a compiler toolchain, so building this image needs no network beyond the base-image
 # pull. Pinned by digest; Dependabot (.github/dependabot.yml) proposes bumps weekly.
-FROM node:22-bookworm@sha256:18a6d90fd60542269850c80ca03b29b1d9b14d6b221ac7ee8e35b0d33ef904bd
+FROM node:26-bookworm@sha256:fa52d1669505e29b58c042875b1d65c229e0787a3610fd52869b22b68e480853
 
 # ImageMagick ships in the full image for building native modules that rarely need it.
 # A scan found 13 HIGH CVEs in it, and an agent has no business decoding hostile images

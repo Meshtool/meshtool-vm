@@ -28,6 +28,9 @@ services:
       POLICY_FILE: /policy/allow.txt
       RECEIPTS_FILE: /receipts/egress.jsonl
       UPSTREAM_PROXY: ${UPSTREAM_PROXY:-}
+      # Most data one host may be sent per hour. An allowed name is still a way
+      # out; this makes bulk exfiltration through one loud and slow. 0 disables.
+      GATE_UPLOAD_BUDGET_MB: ${GATE_UPLOAD_BUDGET_MB:-100}
     volumes:
       - ./policy:/policy:ro
       - ./receipts:/receipts
@@ -65,6 +68,10 @@ services:
 networks:
   inside:
     internal: true
+    # No IPv6 on the inside network, and if a host turns it on anyway the
+    # gateway mode is isolated for v6 too (the host stays unreachable over v6).
+    enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
   outside: {}

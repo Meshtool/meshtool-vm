@@ -50,18 +50,22 @@ if [[ "$proxy" =~ ^http://(127\.0\.0\.1|localhost):([0-9]+)/?$ ]]; then
   for c in "$ca" /root/.ccr/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; do
     [[ -n "$c" && -r "$c" ]] && { ca="$c"; break; }
   done
-  bridge_ip="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')"
-  rport=$((pport + 1))
-  if ! node -e "const s=require('net').connect($rport,'$bridge_ip',()=>process.exit(0));s.on('error',()=>process.exit(1))" 2>/dev/null; then
-    setsid nohup node scripts/relay.mjs "$bridge_ip" "$rport" 127.0.0.1 "$pport" >"$LOG_DIR/relay.log" 2>&1 < /dev/null &
-    sleep 0.5
+  # The host's proxy is on 127.0.0.1, which containers cannot reach. A relay
+  # serves it on a unix socket that only the gate container mounts: no network
+  # port, so nothing else on any Docker network can use it.
+  mkdir -p run && chmod 711 run
+  alive() { node -e "const s=require('net').connect('run/relay.sock',()=>process.exit(0));s.on('error',()=>process.exit(1))" 2>/dev/null; }
+  if ! alive; then
+    setsid nohup node scripts/relay.mjs run/relay.sock 127.0.0.1 "$pport" >"$LOG_DIR/relay.log" 2>&1 < /dev/null &
+    for _ in $(seq 1 25); do alive && break; sleep 0.2; done
+    alive || { say "relay did not come up. Log:"; cat "$LOG_DIR/relay.log"; exit 1; }
   fi
   cat > .env <<EOF
 # Written by scripts/docker-up.sh (cloud mode). Safe to delete on an ordinary machine.
 COMPOSE_FILE=compose.yaml:compose.cloud.yaml
-UPSTREAM_PROXY=http://host.docker.internal:$rport
+UPSTREAM_PROXY=unix:/run/relay/relay.sock
 EXTRA_CA_BUNDLE=$ca
 EOF
-  say "cloud mode on: relay $bridge_ip:$rport -> 127.0.0.1:$pport, CA $ca (.env written)"
+  say "cloud mode on: unix socket run/relay.sock -> 127.0.0.1:$pport, CA $ca (.env written)"
   # Image pulls and builds go through the daemon, which inherits HTTPS_PROXY.
 fi

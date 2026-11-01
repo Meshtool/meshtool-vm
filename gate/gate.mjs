@@ -10,16 +10,27 @@
 //   - an IP literal, an odd port           -> blocked (policy is by name)
 //   - an allowed name that resolves to a   -> blocked (the policy names public
 //     loopback / LAN / link-local address     services, never the host or LAN)
+//   - a host past its upload budget        -> blocked, tunnel cut, receipted
 //   - the receipt cannot be written        -> blocked (no audit, no exit)
+//
+// Receipts are hash-chained: every line carries `prev`, the sha256 of the line
+// before it, so an edit, a deletion or a reorder anywhere in the middle of the
+// file is detectable (scripts/verify-receipts.mjs). The head hash is also
+// served at /healthz, which catches a truncated tail while the gate is up.
 
 import http from 'node:http';
 import net from 'node:net';
 import dns from 'node:dns';
 import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const RULE = /^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*$/;
 const HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/;
+const GENESIS = 'genesis';
+
+export const sha256Hex = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 export function parsePolicy(text) {
   const rules = [];
@@ -32,12 +43,13 @@ export function parsePolicy(text) {
   return rules;
 }
 
-// Missing file -> [] (blocks everything). Malformed file -> throws.
-export function loadPolicy(file) {
+// Missing file -> no rules (blocks everything). Malformed file -> throws.
+export function readPolicy(file) {
   let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
-  return parsePolicy(text);
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return { rules: [], sha256: 'missing' }; }
+  return { rules: parsePolicy(text), sha256: sha256Hex(text) };
 }
+export const loadPolicy = (file) => readPolicy(file).rules;
 
 export function decide(rules, rawHost, port, ports = [80, 443]) {
   const host = String(rawHost || '').toLowerCase().replace(/\.$/, '');
@@ -70,6 +82,56 @@ export function isPrivateIP(ip) {
   return true; // not an IP at all: refuse
 }
 
+// --- the receipt chain ------------------------------------------------------------
+
+// Verify a receipts file's text. Hashes the raw line text (no re-serialising),
+// so there is no canonical-JSON question. `hashes` lists the hash of every line,
+// so a caller holding the gate's live head can prove the tail was not cut.
+export function verifyChain(text) {
+  const body = text.endsWith('\n') ? text.slice(0, -1) : text;
+  if (body === '') return { ok: true, count: 0, head: GENESIS, hashes: [] };
+  const lines = body.split('\n');
+  const hashes = [];
+  let prev = GENESIS;
+  for (let i = 0; i < lines.length; i++) {
+    let obj;
+    try { obj = JSON.parse(lines[i]); } catch { return { ok: false, line: i + 1, error: 'not valid JSON' }; }
+    if (obj.prev !== prev) {
+      return { ok: false, line: i + 1, error: i === 0 ? 'first line does not start the chain' : 'chain broken: a line before this one was edited, removed or reordered' };
+    }
+    prev = sha256Hex(lines[i]);
+    hashes.push(prev);
+  }
+  return { ok: true, count: lines.length, head: prev, hashes };
+}
+
+// Pick the chain back up from the end of an existing file after a restart.
+function readHead(file) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (!size) return GENESIS;
+      const len = Math.min(size, 65536);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      const last = buf.toString('utf8').split('\n').filter(Boolean).pop();
+      return last ? sha256Hex(last) : GENESIS;
+    } finally { fs.closeSync(fd); }
+  } catch { return GENESIS; }
+}
+
+// --- upstream proxy (cloud mode) --------------------------------------------------
+
+// "unix:/path" is a unix socket (no network exposure at all); anything else is
+// an http://host:port proxy.
+function parseUpstream(u) {
+  if (!u) return null;
+  if (u.startsWith('unix:')) return { socketPath: u.slice(5) };
+  const x = new URL(u); // throws on junk: the gate refuses to start
+  return { host: x.hostname, port: Number(x.port) || 80 };
+}
+
 function splitHostPort(s, defPort) {
   const i = s.lastIndexOf(':');
   if (i <= 0) return [s, defPort];
@@ -77,7 +139,7 @@ function splitHostPort(s, defPort) {
 }
 
 // Open a TCP stream to target:port, directly or through an upstream CONNECT proxy.
-function dial(target, port, upstream, cb) {
+function dial(target, port, up, cb) {
   let s, fired = false;
   const done = (err, sock, head) => {
     if (fired) return; fired = true; clearTimeout(t);
@@ -85,15 +147,13 @@ function dial(target, port, upstream, cb) {
     cb(err, sock, head);
   };
   const t = setTimeout(() => done(new Error('connect-timeout')), 10_000);
-  if (!upstream) {
+  if (!up) {
     s = net.connect(port, target, () => done(null, s, Buffer.alloc(0)));
     s.once('error', (e) => done(e));
     return;
   }
-  const u = new URL(upstream);
-  s = net.connect(Number(u.port) || 80, u.hostname, () => {
-    s.write(`CONNECT ${target}:${port} HTTP/1.1\r\nHost: ${target}:${port}\r\n\r\n`);
-  });
+  const hello = () => s.write(`CONNECT ${target}:${port} HTTP/1.1\r\nHost: ${target}:${port}\r\n\r\n`);
+  s = up.socketPath ? net.connect({ path: up.socketPath }, hello) : net.connect(up.port, up.host, hello);
   let buf = Buffer.alloc(0);
   const onData = (d) => {
     buf = Buffer.concat([buf, d]);
@@ -110,76 +170,129 @@ function dial(target, port, upstream, cb) {
 
 export function createGate({
   policyFile, rules: fixed, receiptsFile, ports = [80, 443], upstream = '',
-  allowPrivate = false, watchMs = 0, maxConnections = 256, log = () => {},
+  allowPrivate = false, watchMs = 0, maxConnections = 256,
+  uploadBudget = 0, budgetWindowMs = 3_600_000, log = () => {},
 } = {}) {
-  // Throws on a malformed policy: at start, that refuses to start (see main).
-  let rules = fixed ?? loadPolicy(policyFile);
+  const up = parseUpstream(upstream);
 
-  // A receipt that cannot be written means the action does not happen.
+  // Throws on a malformed policy: at start, that refuses to start (see main).
+  let policy = fixed ? { rules: fixed, sha256: sha256Hex(fixed.join('\n')) } : readPolicy(policyFile);
+  const rules = () => policy.rules;
+
+  // --- receipts: chained, and a receipt that cannot be written means the action does not happen.
+  let head = readHead(receiptsFile);
   const receipt = (r) => {
-    const line = JSON.stringify({ ts: new Date().toISOString(), ...r }) + '\n';
-    fs.appendFileSync(receiptsFile, line);
-    log(line.trimEnd());
+    const line = JSON.stringify({ ts: new Date().toISOString(), ...r, prev: head });
+    fs.appendFileSync(receiptsFile, line + '\n');
+    head = sha256Hex(line); // advance only once the line is on disk
+    log(line);
   };
   const tryReceipt = (r) => { try { receipt(r); return true; } catch { return false; } };
+
+  // Can a receipt be written right now? When it cannot, the gate refuses everything
+  // (fail closed) — so /healthz must say so, or it looks healthy while blocking all.
+  const canWrite = () => {
+    try { fs.accessSync(fs.existsSync(receiptsFile) ? receiptsFile : path.dirname(receiptsFile), fs.constants.W_OK); return true; }
+    catch { return false; }
+  };
 
   // On reload, a malformed policy keeps the last good one and says so, so a
   // half-saved edit does not black-hole the sandbox mid-task.
   const reload = () => {
-    if (fixed) return rules;
+    if (fixed) return policy.rules;
     try {
-      rules = loadPolicy(policyFile);
-      tryReceipt({ kind: 'policy-reload', rules: rules.length });
+      policy = readPolicy(policyFile);
+      tryReceipt({ kind: 'policy-reload', rules: policy.rules.length, policy_sha256: policy.sha256 });
     } catch (e) {
-      tryReceipt({ kind: 'policy-error', error: e.message, kept_rules: rules.length });
+      tryReceipt({ kind: 'policy-error', error: e.message, kept_rules: policy.rules.length, policy_sha256: policy.sha256 });
     }
-    return rules;
+    return policy.rules;
   };
   if (watchMs > 0 && policyFile) fs.watchFile(policyFile, { interval: watchMs }, reload);
+
+  // The first receipt of a run: which policy, exactly, this gate is enforcing.
+  const announce = () => tryReceipt({
+    kind: 'gate-start', rules: policy.rules.length, policy_sha256: policy.sha256,
+    upload_budget_bytes: uploadBudget, upstream: up ? (up.socketPath ? 'unix' : 'http') : 'none',
+  });
+
+  // --- upload budget: bytes sent TO a host per window. Downloads are not limited;
+  // the worry is bulk data leaving through a name that is allowed.
+  const usage = new Map();
+  const charge = (host, n) => {
+    if (!uploadBudget) return true;
+    const now = Date.now();
+    let u = usage.get(host);
+    if (!u || now - u.start > budgetWindowMs) { u = { start: now, bytes: 0 }; usage.set(host, u); }
+    u.bytes += n;
+    return u.bytes <= uploadBudget;
+  };
+  const overBudget = (host) => {
+    if (!uploadBudget) return false;
+    const u = usage.get(host);
+    return !!u && Date.now() - u.start <= budgetWindowMs && u.bytes >= uploadBudget;
+  };
+  const budgetReceipt = (host, port) => tryReceipt({
+    kind: 'budget-exceeded', host, port, budget_bytes: uploadBudget, window_ms: budgetWindowMs,
+  });
 
   // In direct mode the gate resolves the name itself and refuses private
   // addresses. Behind an upstream proxy, that proxy resolves and connects.
   const resolve = async (host) => {
-    if (upstream) return { target: host };
+    if (up) return { target: host };
     const { address } = await dns.promises.lookup(host);
     if (!allowPrivate && isPrivateIP(address)) return { error: 'private-ip', ip: address };
     return { target: address, ip: address };
   };
 
   const server = http.createServer(async (req, res) => {
-    if (req.url === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(`ok rules=${rules.length}\n`); }
+    if (req.url === '/healthz') {
+      if (!canWrite()) {
+        res.writeHead(503, { 'content-type': 'text/plain' });
+        return res.end('receipts-unwritable: the gate cannot write its receipts, so it refuses every connection\n');
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      return res.end(`ok rules=${policy.rules.length} head=${head} budget_mb=${Math.round(uploadBudget / 1048576)}\n`);
+    }
     let url;
     try { url = new URL(req.url); } catch { res.writeHead(400); return res.end('not a proxy request\n'); }
     const port = Number(url.port) || (url.protocol === 'https:' ? 443 : 80);
+    const d = decide(policy.rules, url.hostname, port, ports);
     const refuse = (reason) => {
       const wrote = tryReceipt({ kind: 'egress', method: req.method, host: d.host, port, decision: 'deny', reason });
       reason = wrote ? reason : 'receipt-unwritable';
       res.writeHead(403, { 'x-gate-reason': reason }); res.end(`blocked by gate: ${reason}\n`);
     };
-    const d = decide(rules, url.hostname, port, ports);
     if (!d.allow) return refuse(d.reason);
     if (url.protocol !== 'http:') return refuse('scheme');
     let r;
     try { r = await resolve(d.host); } catch { res.writeHead(502); return res.end(); }
     if (r.error) return refuse(r.error);
+    if (overBudget(d.host)) return refuse('upload-budget');
     if (!tryReceipt({ kind: 'egress', method: req.method, host: d.host, port, ip: r.ip, decision: 'allow', reason: d.reason })) {
       res.writeHead(403, { 'x-gate-reason': 'receipt-unwritable' }); return res.end('blocked by gate: receipt-unwritable\n');
     }
-    const u = upstream ? new URL(upstream) : null;
-    const fwd = http.request({
-      host: u ? u.hostname : r.target, port: u ? Number(u.port) || 80 : port,
-      method: req.method, path: u ? req.url : url.pathname + url.search,
-      headers: { ...req.headers, host: url.host },
-    }, (up) => { res.writeHead(up.statusCode, up.headers); up.pipe(res); });
+    const opts = {
+      method: req.method, headers: { ...req.headers, host: url.host },
+      ...(up
+        ? { ...(up.socketPath ? { socketPath: up.socketPath } : { host: up.host, port: up.port }), path: req.url }
+        : { host: r.target, port, path: url.pathname + url.search }),
+    };
+    const fwd = http.request(opts, (resp) => { res.writeHead(resp.statusCode, resp.headers); resp.pipe(res); });
     fwd.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    req.on('data', (b) => {
+      if (charge(d.host, b.length)) return;
+      budgetReceipt(d.host, port);
+      req.destroy(); fwd.destroy();
+    });
     req.pipe(fwd);
   });
 
-  server.on('connect', async (req, client, head) => {
+  server.on('connect', async (req, client, head0) => {
     client.on('error', () => {});
     const started = Date.now();
     const [rawHost, port] = splitHostPort(req.url, 443);
-    const d = decide(rules, rawHost, port, ports);
+    const d = decide(policy.rules, rawHost, port, ports);
     const refuse = (reason) => {
       const wrote = tryReceipt({ kind: 'egress', method: 'CONNECT', host: d.host, port, decision: 'deny', reason });
       reason = wrote ? reason : 'receipt-unwritable';
@@ -193,25 +306,31 @@ export function createGate({
     let r;
     try { r = await resolve(d.host); } catch (e) { return fail(e); }
     if (r.error) return refuse(r.error);
+    if (overBudget(d.host)) return refuse('upload-budget');
     if (!tryReceipt({ kind: 'egress', method: 'CONNECT', host: d.host, port, ip: r.ip, decision: 'allow', reason: d.reason })) {
       return refuse('receipt-unwritable');
     }
-    dial(r.target, port, upstream, (err, sock, extra) => {
+    dial(r.target, port, up, (err, sock, extra) => {
       if (err) return fail(err);
-      let up = 0, down = 0;
-      client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (extra.length) { down += extra.length; client.write(extra); }
-      if (head.length) { up += head.length; sock.write(head); }
-      client.on('data', (b) => { up += b.length; });
-      sock.on('data', (b) => { down += b.length; });
-      client.pipe(sock); sock.pipe(client);
-      sock.setTimeout(300_000, () => sock.destroy());
-      let closed = false;
+      let sent = 0, recv = 0, closed = false;
       const close = () => {
         if (closed) return; closed = true;
         client.destroy(); sock.destroy();
-        tryReceipt({ kind: 'egress-close', host: d.host, port, bytes_up: up, bytes_down: down, ms: Date.now() - started });
+        tryReceipt({ kind: 'egress-close', host: d.host, port, bytes_up: sent, bytes_down: recv, ms: Date.now() - started });
       };
+      client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (extra.length) { recv += extra.length; client.write(extra); }
+      if (head0.length) {
+        sent += head0.length; sock.write(head0);
+        if (!charge(d.host, head0.length)) { budgetReceipt(d.host, port); return close(); }
+      }
+      client.on('data', (b) => {
+        sent += b.length;
+        if (!charge(d.host, b.length)) { budgetReceipt(d.host, port); close(); }
+      });
+      sock.on('data', (b) => { recv += b.length; });
+      client.pipe(sock); sock.pipe(client);
+      sock.setTimeout(300_000, () => sock.destroy());
       sock.on('close', close); client.on('close', close);
       sock.on('error', close);
     });
@@ -221,7 +340,7 @@ export function createGate({
   server.maxConnections = maxConnections;
 
   const close = () => { if (watchMs > 0 && policyFile) fs.unwatchFile(policyFile, reload); server.close(); };
-  return { server, reload, close, rules: () => rules };
+  return { server, reload, close, announce, rules, head: () => head };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -236,6 +355,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       allowPrivate: env.GATE_ALLOW_PRIVATE === '1',
       watchMs: Number(env.POLICY_WATCH_MS ?? 2000),
       maxConnections: Number(env.GATE_MAX_CONNECTIONS || 256),
+      uploadBudget: Math.round(Number(env.GATE_UPLOAD_BUDGET_MB || 0) * 1048576),
+      budgetWindowMs: Number(env.GATE_BUDGET_WINDOW_MIN || 60) * 60_000,
       log: (l) => console.log(l),
     });
   } catch (e) {
@@ -243,6 +364,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(1);
   }
   if (!gate.rules().length) console.warn('gate: policy is empty or missing — every connection will be blocked');
+  if (!gate.announce()) {
+    console.error(`gate: CANNOT WRITE RECEIPTS to ${env.RECEIPTS_FILE || '/receipts/egress.jsonl'} — every connection will be refused until this is fixed. `
+      + 'The gate runs as uid 1000: check that the receipts folder and file are writable by it (scripts/vm-up.sh repairs this).');
+  }
   process.on('SIGHUP', () => console.log(`gate: policy reloaded, ${gate.reload().length} rules`));
   const port = Number(env.GATE_LISTEN || 3128);
   gate.server.listen(port, '0.0.0.0', () => console.log(`gate: listening on :${port}, ${gate.rules().length} rules`));

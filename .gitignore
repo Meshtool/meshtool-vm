@@ -3,4 +3,5 @@ receipts/*
 !receipts/.gitkeep
 work/*
 !work/.gitkeep
+run/
 node_modules/

@@ -29,7 +29,18 @@ out=$(in_box 'grep -q NoNewPrivs:.*1 /proc/self/status && echo SET'); [[ "$out" 
 out=$(in_box 'for i in 1 2 3; do setsid bash -c "sleep 0.05 & exit"; done; sleep 0.5; grep -l "^State:.*Z" /proc/[0-9]*/status 2>/dev/null | wc -l')
 [[ "$out" == "0" ]] && ok "orphaned processes are reaped (no zombies pile up)" || bad "zombies reaped" "zombies after 3 orphans: $out"
 
+out=$(in_box 'env' | grep -iE '^[A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*=' | cut -d= -f1 | tr '\n' ' ')
+shapes=$(in_box 'env' | grep -E '(ghp_[A-Za-z0-9]{20}|github_pat_|gho_[A-Za-z0-9]{20}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10}|-----BEGIN [A-Z ]*PRIVATE KEY|eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{10,}\.)' | cut -d= -f1 | tr '\n' ' ')
+[[ -z "$out$shapes" ]] && ok "no secrets in the sandbox environment (checked by name and by shape)" || bad "no secrets in the sandbox" "named like a secret: ${out:-none}; shaped like one: ${shapes:-none}"
+
+out=$(in_box 'ls /run/relay >/dev/null 2>&1 && echo SEES || echo NO')
+[[ "$out" == *NO* ]] && ok "the sandbox cannot see the cloud relay socket" || bad "relay hidden from the sandbox" "$out"
+
 # --- the network ---------------------------------------------------------------------
+# Vacuous on a kernel without IPv6 (no /proc/net/if_inet6); real on one that has it.
+out=$(in_box 'cat /proc/net/if_inet6 2>/dev/null | grep -vE "^0{31}1 " | grep -vE "^fe80" | wc -l')
+[[ "$out" == "0" ]] && ok "the sandbox has no routable IPv6 address" || bad "no IPv6" "addresses: $out"
+
 out=$(in_box 'awk "NR>1 && \$2==\"00000000\"" /proc/net/route | wc -l')
 [[ "$out" == "0" ]] && ok "the sandbox has no default route (nowhere to go but the gate)" || bad "no default route" "default routes: $out"
 
@@ -75,6 +86,22 @@ else
   else
     bad "allowlisted host works" "npm view -> $out"
   fi
+fi
+
+# --- the audit trail -----------------------------------------------------------------
+# Last, so it covers everything above. Read the gate's live head first, then check
+# the file: if the tail was cut or a line edited, the live head is no longer in it.
+hz=$(in_box 'curl -s --noproxy "*" -m 4 http://gate:3128/healthz')
+mb=$(sed -n 's/.*budget_mb=\([0-9]*\).*/\1/p' <<<"$hz")
+[[ -n "$mb" && "$mb" -gt 0 ]] && ok "the gate enforces an upload budget ($mb MB per host per hour)" || bad "upload budget on" "/healthz said: $hz"
+
+live=$(sed -n 's/.*head=\([0-9a-f]\{64\}\|genesis\).*/\1/p' <<<"$hz")
+if [[ -z "$live" ]]; then
+  bad "receipts are an intact hash chain" "could not read the gate's live head from /healthz: $hz"
+elif out=$(node scripts/verify-receipts.mjs receipts/egress.jsonl --head "$live" 2>&1); then
+  ok "the receipts are an intact hash chain, and match the running gate ($out)"
+else
+  bad "receipts are an intact hash chain" "$out"
 fi
 
 echo "$pass passed, $fail failed"

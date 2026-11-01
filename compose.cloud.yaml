@@ -2,13 +2,16 @@
 # (cloud agent containers, some corporate laptops). scripts/docker-up.sh turns
 # it on by writing .env; on an ordinary machine it is never used.
 #
-# The gate chains its allowed tunnels to that proxy (through scripts/relay.mjs,
-# because containers cannot reach the host's 127.0.0.1), and the sandbox trusts
-# the proxy's CA. The gate's allowlist still decides first: the upstream proxy
-# can only narrow what the sandbox reaches, never widen it.
+# The gate chains its allowed tunnels to that proxy through a UNIX SOCKET that
+# scripts/relay.mjs serves from ./run (the host's proxy listens on 127.0.0.1,
+# which containers cannot reach). A socket is not a network port: no other
+# container, and nothing on the bridge, can reach it — only the gate has the
+# mount. The sandbox trusts the proxy's CA. The gate's allowlist still decides
+# first: the upstream proxy can only narrow what the sandbox reaches.
 services:
   gate:
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./run:/run/relay:ro
   sandbox:
     environment:
       NODE_EXTRA_CA_CERTS: /etc/ssl/certs/meshtool-extra-ca.crt

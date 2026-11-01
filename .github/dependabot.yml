@@ -1,0 +1,13 @@
+# Keeps the pinned base-image digests and the workflow actions from going stale.
+# A pin without a bumper is a CVE that never gets fixed.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /gate
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /sandbox
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

@@ -1,15 +1,18 @@
 # Where the sandbox may connect. One host per line; "*.example.com" covers
 # subdomains (not example.com itself). Anything not listed is blocked and
-# receipted. Edit, then reload with:  docker compose kill -s HUP gate
+# receipted. Edits take effect within 2 seconds; a malformed line keeps the
+# previous policy and writes a policy-error receipt.
 #
 # Packages
 registry.npmjs.org
 pypi.org
 files.pythonhosted.org
-# Git over https
+# Git over https, the API, and raw file reads
 github.com
+api.github.com
 codeload.github.com
 objects.githubusercontent.com
+raw.githubusercontent.com
 # The Meshtool platform
 market.meshtool.ai
 runtime.meshtool.ai

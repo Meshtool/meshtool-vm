@@ -2,9 +2,13 @@
 #
 #   sandbox ──(inside: no route out)──> gate ──(outside)──> allowlisted hosts
 #
-# The sandbox is on an `internal` network: even if a tool ignores the proxy
-# settings, there is no route to the internet. The gate is the only container
-# on both networks, and it decides and receipts every connection.
+# The sandbox is on an `internal` network in `isolated` gateway mode: there is
+# no route to the internet, and the host has no address on that network either,
+# so a tool that ignores the proxy settings has nowhere to go — not even to a
+# service listening on the host. The gate is the only container on both
+# networks, and it decides and receipts every connection.
+#
+# Needs Docker Engine 28 or newer (for the isolated gateway mode).
 name: meshtool-vm
 
 x-hardened: &hardened
@@ -12,6 +16,9 @@ x-hardened: &hardened
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
   restart: unless-stopped
+  # A real PID 1 that reaps orphans; without it, every finished background
+  # process stays a zombie and the pids limit fills up over a long session.
+  init: true
 
 services:
   gate:
@@ -58,4 +65,6 @@ services:
 networks:
   inside:
     internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
   outside: {}

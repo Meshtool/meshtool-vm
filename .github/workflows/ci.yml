@@ -1,0 +1,35 @@
+# The proof runs on every push and PR: the gate's tests, then the real
+# containers on a runner with open internet, where "no route around the gate"
+# is a real test and not a given.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm test
+
+  sandbox-walls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: docker version --format 'engine={{.Server.Version}}'
+      - run: ./scripts/vm-up.sh
+      - run: ./scripts/vm-check.sh
+      - if: failure()
+        run: docker compose logs gate
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts
+          path: receipts/egress.jsonl
+          if-no-files-found: ignore

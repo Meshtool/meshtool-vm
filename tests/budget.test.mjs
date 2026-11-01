@@ -11,6 +11,8 @@ import { createGate } from '../gate/gate.mjs';
 const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'budget-'));
 const listen = (srv) => new Promise((ok) => srv.listen(0, '127.0.0.1', () => ok(srv.address().port)));
 const lines = (f) => fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+// DNS is stubbed: see the note in gate.test.mjs about `localhost` and ::1.
+const V4 = async () => [{ address: '127.0.0.1', family: 4 }];
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 function connectVia(gatePort, target) {
@@ -36,7 +38,7 @@ async function sink() {
 test('upload budget: a tunnel is cut when its host is sent too much, and the cut is receipted', async () => {
   const t = await sink();
   const file = path.join(tmpdir(), 'egress.jsonl');
-  const g = createGate({ rules: ['localhost'], allowPrivate: true, receiptsFile: file, ports: [t.port], uploadBudget: 1000 });
+  const g = createGate({ rules: ['localhost'], allowPrivate: true, lookup: V4, receiptsFile: file, ports: [t.port], uploadBudget: 1000 });
   const gp = await listen(g.server);
 
   const { s, head } = await connectVia(gp, `localhost:${t.port}`);
@@ -58,7 +60,7 @@ test('upload budget: a tunnel is cut when its host is sent too much, and the cut
 test('upload budget: once spent, new connections to that host are refused until the window passes', async () => {
   const t = await sink();
   const file = path.join(tmpdir(), 'egress.jsonl');
-  const g = createGate({ rules: ['localhost'], allowPrivate: true, receiptsFile: file, ports: [t.port], uploadBudget: 500, budgetWindowMs: 400 });
+  const g = createGate({ rules: ['localhost'], allowPrivate: true, lookup: V4, receiptsFile: file, ports: [t.port], uploadBudget: 500, budgetWindowMs: 400 });
   const gp = await listen(g.server);
 
   const first = await connectVia(gp, `localhost:${t.port}`);
@@ -81,7 +83,7 @@ test('upload budget: 0 means no limit, and downloads are never counted', async (
   const big = net.createServer((s) => { s.write(Buffer.alloc(200_000)); s.on('error', () => {}); s.on('data', () => {}); });
   const bp = await listen(big);
   const file = path.join(tmpdir(), 'egress.jsonl');
-  const g = createGate({ rules: ['localhost'], allowPrivate: true, receiptsFile: file, ports: [bp], uploadBudget: 1000 });
+  const g = createGate({ rules: ['localhost'], allowPrivate: true, lookup: V4, receiptsFile: file, ports: [bp], uploadBudget: 1000 });
   const gp = await listen(g.server);
   const { s, rest } = await connectVia(gp, `localhost:${bp}`);
   let got = rest.length; s.on('data', (d) => (got += d.length));
@@ -92,7 +94,7 @@ test('upload budget: 0 means no limit, and downloads are never counted', async (
   } finally { s.destroy(); g.close(); big.close(); }
 
   const t = await sink();
-  const g2 = createGate({ rules: ['localhost'], allowPrivate: true, receiptsFile: path.join(tmpdir(), 'e.jsonl'), ports: [t.port], uploadBudget: 0 });
+  const g2 = createGate({ rules: ['localhost'], allowPrivate: true, lookup: V4, receiptsFile: path.join(tmpdir(), 'e.jsonl'), ports: [t.port], uploadBudget: 0 });
   const gp2 = await listen(g2.server);
   const { s: s2 } = await connectVia(gp2, `localhost:${t.port}`);
   try {
@@ -152,7 +154,7 @@ test('unix-socket upstream: an allowed name tunnels through it, and the allowlis
   const sock = path.join(dir, 'relay.sock');
   const up = await fakeUpstream(sock);
   const file = path.join(dir, 'egress.jsonl');
-  const g = createGate({ rules: ['anything.example'], receiptsFile: file, upstream: `unix:${sock}` });
+  const g = createGate({ rules: ['anything.example'], receiptsFile: file, upstream: `unix:${sock}`, lookup: async () => { throw new Error('upstream mode must not resolve names itself'); } });
   const gp = await listen(g.server);
 
   const { s, head } = await connectVia(gp, 'anything.example:443');
@@ -173,7 +175,7 @@ test('unix-socket upstream: a refusing upstream becomes a 502 and a receipt', as
   const sock = path.join(dir, 'relay.sock');
   const up = await fakeUpstream(sock, 403);
   const file = path.join(dir, 'egress.jsonl');
-  const g = createGate({ rules: ['anything.example'], receiptsFile: file, upstream: `unix:${sock}` });
+  const g = createGate({ rules: ['anything.example'], receiptsFile: file, upstream: `unix:${sock}`, lookup: async () => { throw new Error('upstream mode must not resolve names itself'); } });
   const gp = await listen(g.server);
   const { head } = await connectVia(gp, 'anything.example:443');
   assert.match(head, /^HTTP\/1\.1 502/);

@@ -168,10 +168,25 @@ function dial(target, port, up, cb) {
   s.once('error', (e) => done(e));
 }
 
+// Try each candidate address in turn (IPv4 first), so one dead address — say an AAAA
+// record on a host with no IPv6 route — does not fail a name whose A record works.
+function dialAny(targets, port, up, cb) {
+  const list = targets.slice(0, 3);
+  let i = 0, lastErr;
+  const next = () => {
+    if (i >= list.length) return cb(lastErr || new Error('no-address'));
+    dial(list[i++], port, up, (err, sock, head) => { if (err) { lastErr = err; return next(); } cb(null, sock, head); });
+  };
+  next();
+}
+
 export function createGate({
   policyFile, rules: fixed, receiptsFile, ports = [80, 443], upstream = '',
   allowPrivate = false, watchMs = 0, maxConnections = 256,
   uploadBudget = 0, budgetWindowMs = 3_600_000, log = () => {},
+  // DNS, injectable so tests do not depend on the machine's resolver. Must return
+  // [{ address, family }, ...] — every record, not just the first.
+  lookup = (host) => dns.promises.lookup(host, { all: true, verbatim: true }),
 } = {}) {
   const up = parseUpstream(upstream);
 
@@ -238,11 +253,19 @@ export function createGate({
 
   // In direct mode the gate resolves the name itself and refuses private
   // addresses. Behind an upstream proxy, that proxy resolves and connects.
+  // Every record is checked: a name with one public and one private address is refused,
+  // so a mixed answer cannot smuggle the private one in. The gate connects only to
+  // addresses it has just validated (never re-resolving), IPv4 first.
   const resolve = async (host) => {
-    if (up) return { target: host };
-    const { address } = await dns.promises.lookup(host);
-    if (!allowPrivate && isPrivateIP(address)) return { error: 'private-ip', ip: address };
-    return { target: address, ip: address };
+    if (up) return { targets: [host] };
+    const addrs = await lookup(host);
+    if (!addrs?.length) throw new Error('no-address');
+    if (!allowPrivate) {
+      const bad = addrs.find((a) => isPrivateIP(a.address));
+      if (bad) return { error: 'private-ip', ip: bad.address };
+    }
+    const ordered = [...addrs].sort((a, b) => a.family - b.family);
+    return { targets: ordered.map((a) => a.address), ip: ordered[0].address };
   };
 
   const server = http.createServer(async (req, res) => {
@@ -276,7 +299,7 @@ export function createGate({
       method: req.method, headers: { ...req.headers, host: url.host },
       ...(up
         ? { ...(up.socketPath ? { socketPath: up.socketPath } : { host: up.host, port: up.port }), path: req.url }
-        : { host: r.target, port, path: url.pathname + url.search }),
+        : { host: r.targets[0], port, path: url.pathname + url.search }),
     };
     const fwd = http.request(opts, (resp) => { res.writeHead(resp.statusCode, resp.headers); resp.pipe(res); });
     fwd.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
@@ -310,7 +333,7 @@ export function createGate({
     if (!tryReceipt({ kind: 'egress', method: 'CONNECT', host: d.host, port, ip: r.ip, decision: 'allow', reason: d.reason })) {
       return refuse('receipt-unwritable');
     }
-    dial(r.target, port, up, (err, sock, extra) => {
+    dialAny(r.targets, port, up, (err, sock, extra) => {
       if (err) return fail(err);
       let sent = 0, recv = 0, closed = false;
       const close = () => {

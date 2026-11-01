@@ -74,7 +74,11 @@ function connectVia(gatePort, target) {
 
 // Tests tunnel to a server on 127.0.0.1, so they opt out of the private-address
 // refusal; one test below proves the refusal is on by default.
-const LOCAL = { rules: ['localhost'], allowPrivate: true };
+// DNS is stubbed so these tests do not depend on the machine's resolver. (On a machine
+// with IPv6 loopback, `localhost` resolves to ::1 first; the servers below listen on
+// 127.0.0.1 only. That difference is exactly what once made CI hang while a laptop passed.)
+const V4 = async () => [{ address: '127.0.0.1', family: 4 }];
+const LOCAL = { rules: ['localhost'], allowPrivate: true, lookup: V4 };
 
 test('allowed CONNECT tunnels and leaves allow + close receipts, with the resolved ip', async () => {
   const target = http.createServer((q, r) => r.end('hello from target'));
@@ -118,7 +122,7 @@ test('an allowed name that resolves to a private address is refused by default',
   const tPort = await listen(target);
   let reached = false; target.on('connection', () => (reached = true));
   const receipts = tmp('egress.jsonl');
-  const g = createGate({ rules: ['localhost'], receiptsFile: receipts, ports: [tPort] });
+  const g = createGate({ rules: ['localhost'], receiptsFile: receipts, ports: [tPort], lookup: V4 });
   const gPort = await listen(g.server);
   const { head } = await connectVia(gPort, `localhost:${tPort}`);
   assert.match(head, /^HTTP\/1\.1 403/);
@@ -194,4 +198,58 @@ test('plain-http to a blocked host is refused; https-as-plain is refused', async
   assert.equal((await get('http://example.com/')).headers['x-gate-reason'], 'not-on-allowlist');
   assert.equal((await get('https://registry.npmjs.org/')).headers['x-gate-reason'], 'scheme');
   g.close();
+});
+
+// --- address selection ---------------------------------------------------------------
+
+// A target that only listens on 127.0.0.1, and a gate whose resolver says what we choose.
+async function viaResolver(answers, { allowPrivate = true } = {}) {
+  const target = http.createServer((q, r) => r.end('hello from target'));
+  const tPort = await listen(target);
+  const receipts = tmp('egress.jsonl');
+  const g = createGate({ rules: ['multi.example'], allowPrivate, receiptsFile: receipts, ports: [tPort], lookup: async () => answers });
+  const gPort = await listen(g.server);
+  const out = await connectVia(gPort, `multi.example:${tPort}`);
+  const done = () => { out.s.destroy(); g.close(); target.close(); };
+  return { ...out, receipts, done };
+}
+
+test('address selection: IPv4 is tried before IPv6, whatever order DNS answered in', async () => {
+  const r = await viaResolver([{ address: '::1', family: 6 }, { address: '127.0.0.1', family: 4 }]);
+  assert.match(r.head, /^HTTP\/1\.1 200/);
+  assert.equal(lines(r.receipts)[0].ip, '127.0.0.1');
+  r.done();
+});
+
+test('address selection: when the first address refuses, the next one is tried', async () => {
+  // 127.0.0.2 is loopback too, and nothing listens there: instant ECONNREFUSED.
+  const r = await viaResolver([{ address: '127.0.0.2', family: 4 }, { address: '127.0.0.1', family: 4 }]);
+  assert.match(r.head, /^HTTP\/1\.1 200/);
+  r.done();
+});
+
+test('address selection: a name with ANY private address is refused, even beside a public one', async () => {
+  const r = await viaResolver([{ address: '140.82.112.3', family: 4 }, { address: '10.0.0.5', family: 4 }], { allowPrivate: false });
+  assert.match(r.head, /^HTTP\/1\.1 403/);
+  assert.match(r.head, /X-Gate-Reason: private-ip/);
+  assert.equal(lines(r.receipts)[0].decision, 'deny');
+  r.done();
+});
+
+test('address selection: an IPv6-only loopback answer is refused as private', async () => {
+  const r = await viaResolver([{ address: '::1', family: 6 }], { allowPrivate: false });
+  assert.match(r.head, /X-Gate-Reason: private-ip/);
+  r.done();
+});
+
+test('address selection: a resolver that fails or answers nothing is a 502, never a hang or a bypass', async () => {
+  for (const lookup of [async () => { throw new Error('ENOTFOUND'); }, async () => []]) {
+    const receipts = tmp('egress.jsonl');
+    const g = createGate({ rules: ['multi.example'], receiptsFile: receipts, lookup });
+    const gPort = await listen(g.server);
+    const { head } = await connectVia(gPort, 'multi.example:443');
+    assert.match(head, /^HTTP\/1\.1 502/);
+    assert.equal(lines(receipts).at(-1).kind, 'egress-close');
+    g.close();
+  }
 });

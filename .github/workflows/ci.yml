@@ -7,17 +7,52 @@ on:
     branches: [main]
   pull_request:
 
+# Every job has a ceiling. A hung job is a silent failure: GitHub's default is six hours,
+# during which a PR looks "still running". Ten minutes is generous for all of these.
 jobs:
   gate-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm test
 
+  # The scanner is pinned by digest like everything else here: a scan you cannot
+  # reproduce is an opinion. Findings are only counted when a fix exists
+  # (--ignore-unfixed), because a CVE nobody has patched is not something a PR can fix.
+  image-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TRIVY: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+      - name: Gate image — no HIGH or CRITICAL with a fix available
+        run: >
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $TRIVY image
+          --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+          meshtool-vm-gate:latest
+      - name: Sandbox image — OS packages
+        run: >
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $TRIVY image
+          --scanners vuln --pkg-types os --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+          meshtool-vm-sandbox:latest
+      # Known and tracked, not yet gating: npm's own bundled dependencies in the Node 22
+      # image (the npm 10 line will not get the fixes; pinning npm 11 needs build-time
+      # network, which strict hosts do not have). Shown so nobody forgets it exists.
+      - name: Sandbox image — npm's bundled packages (known, not gating)
+        continue-on-error: true
+        run: >
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $TRIVY image
+          --scanners vuln --pkg-types library --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+          meshtool-vm-sandbox:latest
+
   sandbox-walls:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

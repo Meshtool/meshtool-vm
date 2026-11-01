@@ -120,6 +120,29 @@ test('compose.cloud.yaml: the relay is a read-only socket mount into the gate on
   assert.doesNotMatch(FILES['compose.cloud.yaml'], /extra_hosts|host-gateway|host\.docker\.internal/, 'no path to the host over the network');
 });
 
+test('both Dockerfiles pin their base image by digest, so a rebuild gets the same bytes', () => {
+  for (const f of ['gate/Dockerfile', 'sandbox/Dockerfile']) {
+    const froms = [...read(f).matchAll(/^FROM\s+(\S+)/gm)].map((m) => m[1]);
+    assert.ok(froms.length, `${f} has a FROM`);
+    for (const from of froms) assert.match(from, /@sha256:[0-9a-f]{64}$/, `${f}: ${from} is not pinned by digest`);
+  }
+});
+
+test('the gate image carries no package manager (it only ever runs `node gate.mjs`)', () => {
+  const df = read('gate/Dockerfile');
+  assert.match(df, /rm -rf \/usr\/local\/lib\/node_modules/);
+  assert.match(df, /!\s*command -v npm/, 'the build must assert npm is really gone');
+});
+
+test('CI scans both images with a digest-pinned scanner, and Dependabot keeps the pins fresh', () => {
+  const ci = read('.github/workflows/ci.yml');
+  assert.match(ci, /aquasec\/trivy@sha256:[0-9a-f]{64}/, 'the scanner itself is pinned');
+  assert.match(ci, /meshtool-vm-gate:latest/);
+  assert.match(ci, /meshtool-vm-sandbox:latest/);
+  const dep = read('.github/dependabot.yml');
+  for (const dir of ['/gate', '/sandbox']) assert.match(dep, new RegExp(`package-ecosystem: docker[\\s\\S]*?directory: ${dir}`), `Dependabot watches ${dir}`);
+});
+
 test('both Dockerfiles end as a non-root user', () => {
   for (const f of ['gate/Dockerfile', 'sandbox/Dockerfile']) {
     const users = [...read(f).matchAll(/^USER\s+(\S+)/gm)].map((m) => m[1]);

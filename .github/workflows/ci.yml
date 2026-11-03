@@ -63,7 +63,7 @@ jobs:
       - if: failure()
         run: docker compose logs gate
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: receipts
           path: receipts/egress.jsonl

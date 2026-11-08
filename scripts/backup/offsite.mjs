@@ -13,10 +13,10 @@ function run(exe,args,opts={}) {
  if(r.status!==0) throw new Error(`step_failed:${exe===SSH?'ssh':'r2'}:status=${r.status}`);
  return r.stdout;
 }
-const ssh=(command,input)=>run(SSH,['-o','BatchMode=yes','-o','ConnectTimeout=15','meshtool',command],input?{input}:{});
+const ssh=(command,input)=>run(SSH,['-o','BatchMode=yes','-o','IdentityAgent=none','-o','ConnectTimeout=15','meshtool',command],input?{input}:{});
 try {
  mkdirSync(DIR,{recursive:true});
- const creds=loadCredentials();
+ const creds=loadCredentials('C:/Users/vipth/.vault/secrets.env');
  const get=k=>creds.filter(c=>c.name===k).at(-1)?.val;
  const pass=get('ESTATE_BACKUP_PASSPHRASE'), token=get('CLOUDFLARE_API_TOKEN');
  if(!pass||!token) throw Error('required_vault_key_missing');

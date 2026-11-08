@@ -68,10 +68,24 @@ Capture refuses when VM free space is below 4 GiB. Monitor space because failed
 offsite transfers deliberately retain local data. Failures never advance LATEST or a verified
 receipt. Reruns use the same encrypted artifact and object hashes.
 
-The Windows scheduled transfer follows the existing backup task's logged-in-user
-principal; it needs the host user session, SSH identity, vault and network.
-The task runs daily at 03:00 Pacific and at login; StartWhenAvailable catches missed schedules. A successful VM capture
-alone is not an off-machine backup: require a fresh `latest-verified.json`.
+The Windows task now uses S4U/Limited under the same account, with no stored
+Windows password. It runs daily at 03:00 Pacific and five minutes after startup,
+with StartWhenAvailable. The wrapper requires session 0, a batch logon and no
+interactive token; an interactive negative control must fail. The S4U candidate
+performed a fresh upload/download and full isolated restore before promotion.
+It uses file-based SSH authentication (IdentityAgent=none) and an explicit vault
+path; network authentication by those existing credentials passed under S4U.
+This is not a promise that Windows integrated credentials or EFS work in S4U.
+See [Microsoft task logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type).
+
+NETWORK FOLLOW-UP PENDING: Windows Tailscale's unattended flag is currently off.
+The user required no live-service changes, so enabling that single flag is awaiting
+explicit clarification. The scheduled process itself is login-independent; end-to-end
+logout readiness also needs the VM network path to survive logout. Do not treat
+service StartType=Automatic as proof of that. See the current owning OPEN-LOOPS.
+A successful VM capture alone is not an off-machine backup: require a fresh
+latest-verified.json. A physical Windows logout/reboot was not performed because
+it would disrupt the user's other work.
 
 ## Deployment and checks
 

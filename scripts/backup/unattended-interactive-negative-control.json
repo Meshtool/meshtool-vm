@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-11-08T10:18:30.9468564Z",
+  "user": "SOLIDITY-SLOP\\vipth",
+  "sessionId": 1,
+  "userInteractive": true,
+  "batchLogon": false,
+  "interactiveLogon": true,
+  "fullVerification": false,
+  "ok": false,
+  "error": "noninteractive_batch_logon_required"
+}

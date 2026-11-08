@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-11-08T10:18:59.5220469Z",
+  "user": "solidity-slop\\vipth",
+  "sessionId": 0,
+  "userInteractive": false,
+  "batchLogon": true,
+  "interactiveLogon": false,
+  "fullVerification": true,
+  "ok": true,
+  "completedAt": "2026-11-08T10:20:39.2033678Z",
+  "source": "20261108T100907Z",
+  "restoreVerifiedAt": "2026-11-08T10:20:38.348Z",
+  "object": "r2://estate-backup/meshtool-vm/20261108T100907Z-c58906b6ddf21df3.enc.manifest.json",
+  "filesVerified": 3422,
+  "browserUid": 1000,
+  "postgresTablesRestored": 23
+}

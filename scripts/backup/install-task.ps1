@@ -1,9 +1,9 @@
-$ErrorActionPreference = 'Stop'
-$base = 'C:\backups\meshtool-recovery'
-$action = New-ScheduledTaskAction -Execute 'C:\Windows\System32\conhost.exe' -Argument '--headless "C:\Program Files\nodejs\node.exe" "C:\backups\meshtool-recovery\offsite.mjs"' -WorkingDirectory $base
-$existing = Get-ScheduledTask -TaskName 'hq-weekly-estate-backup'
-$principal = New-ScheduledTaskPrincipal -UserId $existing.Principal.UserId -LogonType Interactive -RunLevel Limited
-$daily = New-ScheduledTaskTrigger -Daily -At '03:00'
-$login = New-ScheduledTaskTrigger -AtLogOn -User $existing.Principal.UserId
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName 'meshtool-seat-workspace-backup' -Action $action -Trigger @($daily,$login) -Principal $principal -Settings $settings -Description 'Download-verified encrypted Meshtool seat/workspace backup to existing R2; isolated restore, no live service changes.' | Select-Object TaskName,State
+$ErrorActionPreference='Stop'
+$existing=Get-ScheduledTask -TaskName 'meshtool-seat-workspace-backup'
+if($existing.Principal.LogonType.ToString() -eq 'S4U') {
+  if($existing.Actions.Execute -ne 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -or $existing.Actions.Arguments -notlike '*run-unattended.ps1*'){throw 'unexpected_backup_action'}
+  $existing | Select-Object TaskName,State,@{n='LogonType';e={$_.Principal.LogonType.ToString()}}
+  exit 0
+}
+& "$PSScriptRoot\enable-unattended.ps1"
+exit $LASTEXITCODE

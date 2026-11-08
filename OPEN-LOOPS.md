@@ -9,4 +9,13 @@ Final proof 10:14 UTC supersedes the earlier administrator-only browser check: s
 
 ## 2026-11-08 10:22 UTC — noninteractive backup execution (Codex)
 Implemented and verified: temporary S4U task completed a fresh R2 upload/download plus full isolated restore in session0, UserInteractive=false, BATCH=true, INTERACTIVE=false. 3422 files, normal browser UID1000 and23PG tables pass. Original task then promoted to S4U/Limited under the same user, daily03:00 Pacific plus startup delay5min; Task Scheduler and actual on-disk task XML agree, subsequent invocation exit0. SSH explicitly disables identity-agent dependence. Interactive execution negative control fails before running the backup. Evidence: scripts/backup/unattended-full-proof.json and unattended-interactive-negative-control.json; host unattended-install.json. No Windows password stored; no new account, service restart or app configuration change.
-Still IN PROGRESS: network logout dependency. Windows Tailscale1.104.2 has ForceDaemon omitted (=false); installed CLI documents --unattended as the setting that keeps it running after GUI logout. Tailscale and Hyper-V services are automatic/running, but service startup alone does not establish tailnet persistence at logout. User explicitly required not touching live services, so no network preference change made. Asked whether to enable only --unattended=true without restart; waiting on DW. Prepared host enable-tailnet-unattended.mjs (not executed). Owner codex-unattended-backup, claim667. Next: on approval, toggle that one preference, verify only ForceDaemon changed and same node/backend/VM service starts; otherwise record explicit network limitation. Do not claim a completed signed-out end-to-end guarantee while this remains unresolved.
+DONE — network logout dependency resolved at 10:24 UTC on DW's explicit approval
+“Enable unattended mode; no restart”. Only Tailscale ForceDaemon changed false->true;
+service PID8500 unchanged, same node, backend Running, SSH without agent passed.
+Subsequent S4U/session0 backup invocation passed. All14 live container start times
+and restart counts unchanged. Evidence: scripts/backup/tailnet-unattended-proof.json;
+host unattended-proof.json. Owner codex-unattended-backup, claim668. No waiting-on-DW
+item remains. No actual Windows logout/reboot was forced; the noninteractive batch
+execution, complete transfer/restore proof and required unattended network setting
+were verified without disrupting live work. Daily03:00 Pacific and startup+5min
+remain installed. Earlier UAC installer already succeeded; no outstanding prompt.

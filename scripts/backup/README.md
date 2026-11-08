@@ -78,11 +78,12 @@ path; network authentication by those existing credentials passed under S4U.
 This is not a promise that Windows integrated credentials or EFS work in S4U.
 See [Microsoft task logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type).
 
-NETWORK FOLLOW-UP PENDING: Windows Tailscale's unattended flag is currently off.
-The user required no live-service changes, so enabling that single flag is awaiting
-explicit clarification. The scheduled process itself is login-independent; end-to-end
-logout readiness also needs the VM network path to survive logout. Do not treat
-service StartType=Automatic as proof of that. See the current owning OPEN-LOOPS.
+NETWORK LOGOUT DEPENDENCY RESOLVED (2026-11-08 10:24 UTC): DW explicitly
+approved enabling only Tailscale unattended mode, without restart. ForceDaemon
+changed false->true; every other preference stayed equal, node identity and
+Tailscale service PID stayed equal, backend stayed Running and SSH with
+IdentityAgent=none passed. The S4U task also passed after the change. Evidence:
+scripts/backup/tailnet-unattended-proof.json. No live app/container restarted.
 A successful VM capture alone is not an off-machine backup: require a fresh
 latest-verified.json. A physical Windows logout/reboot was not performed because
 it would disrupt the user's other work.

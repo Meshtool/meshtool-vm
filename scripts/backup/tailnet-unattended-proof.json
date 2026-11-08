@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-08T10:24:44.636Z",
+  "beforeUnattended": false,
+  "afterUnattended": true,
+  "changedPreferenceKeys": [
+    "ForceDaemon"
+  ],
+  "sameNode": true,
+  "backendRunning": true,
+  "noRestartCommandUsed": true,
+  "ok": true,
+  "sameServiceProcess": true,
+  "serviceProcessId": 8500,
+  "sshWithoutAgentPassed": true
+}

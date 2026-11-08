@@ -23,12 +23,21 @@ def extract(data,dest):
             elif m.isfile():
                 with target.open('xb') as f: f.write(t.extractfile(m).read())
                 target.chmod(m.mode & 0o777)
+                if os.geteuid()==0: os.chown(target,m.uid,m.gid)
         for m in members:
-            if m.issym(): (dest/m.name).symlink_to(m.linkname)
+            if m.issym():
+                (dest/m.name).symlink_to(m.linkname)
+                if os.geteuid()==0: os.lchown(dest/m.name,m.uid,m.gid)
+        for m in reversed(members):
+            if m.isdir():
+                (dest/m.name).chmod(m.mode & 0o777)
+                if os.geteuid()==0: os.chown(dest/m.name,m.uid,m.gid)
 def verify(root):
     manifest=json.loads((root/'manifest.json').read_text()); count=0; sqlite_count=0
     for e in manifest['entries']:
         p=root/e['path']
+        if 'uid' in e and (p.lstat().st_uid,p.lstat().st_gid)!=(e['uid'],e['gid']): raise RuntimeError('ownership_mismatch')
+        if 'mode' in e and stat.S_IMODE(p.lstat().st_mode)!=e['mode']: raise RuntimeError('mode_mismatch')
         if 'link' in e:
             if not p.is_symlink() or os.readlink(p)!=e['link']: raise RuntimeError('link_mismatch')
         else:
@@ -38,6 +47,9 @@ def verify(root):
                 with sqlite3.connect(p.as_uri()+'?mode=ro',uri=True) as c:
                     if c.execute('pragma integrity_check').fetchall()!=[('ok',)]: raise RuntimeError('sqlite_integrity')
                 sqlite_count+=1
+    for d in manifest.get('directories',[]):
+        p=root/d['path']; st=p.stat()
+        if not p.is_dir() or (st.st_uid,st.st_gid,stat.S_IMODE(st.st_mode))!=(d['uid'],d['gid'],d['mode']): raise RuntimeError('directory_metadata_mismatch')
     for n in ('memory.json','storage.json','sessions.json','projects.json'): json.loads((root/'seat'/n).read_text())
     # Negative control: a missing file must make the same verifier reject the restore.
     return count,sqlite_count
@@ -47,6 +59,10 @@ const fs=require('fs'), {chromium}=require('playwright');
 fs.cpSync('/proof/seat/profile','/tmp/profile',{recursive:true});
 const saved=JSON.parse(fs.readFileSync('/proof/seat/storage.json'));
 const memory=JSON.parse(fs.readFileSync('/proof/seat/memory.json'));
+const owner=fs.statSync('/proof/seat');
+const own=p=>{const st=fs.lstatSync(p);fs.lchownSync(p,owner.uid,owner.gid);if(st.isDirectory())for(const n of fs.readdirSync(p))own(p+'/'+n)};
+own('/tmp/profile');fs.mkdirSync('/tmp/home');fs.chownSync('/tmp/home',owner.uid,owner.gid);process.env.HOME='/tmp/home';process.setgroups([]);process.setgid(owner.gid);process.setuid(owner.uid);
+if(process.getuid()!==1000)throw Error('unexpected_seat_identity');
 const ctx=await chromium.launchPersistentContext('/tmp/profile',{headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
 await ctx.route('**/*',r=>r.abort());
 if(saved.cookies?.length) await ctx.addCookies(saved.cookies);
@@ -54,7 +70,7 @@ const cookies=await ctx.cookies();
 const expected=(saved.cookies||[]).filter(c=>c.expires<=0||c.expires>Date.now()/1000);
 if(!expected.every(e=>cookies.some(c=>c.name===e.name&&c.domain===e.domain&&c.path===e.path&&c.value===e.value)))throw Error('cookie_restore_mismatch');
 await ctx.close();
-console.log(JSON.stringify({browserProfileOpened:true,savedCookiesRestored:expected.length,memoryJsonReadable:!!memory}));
+console.log(JSON.stringify({browserProfileOpened:true,browserUid:process.getuid(),savedCookiesRestored:expected.length,memoryJsonReadable:!!memory}));
 })().catch(()=>{console.error('browser_restore_failed');process.exit(1)});
 '''
 def main():
@@ -75,7 +91,7 @@ def main():
     verify(root)
     # Unpack OpenShell workspace only into this new proof directory, never a live container.
     extract((root/'openshell-workspace/workspace.tar').read_bytes(),dest/'openshell-restored')
-    b=subprocess.run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--memory','768m','--cpus','1','--user','0','--tmpfs','/tmp:rw,size=256m','--mount',f'type=bind,src={root},dst=/proof,readonly','--entrypoint','node','seat-spike:0.1','-e',BROWSER],capture_output=True,timeout=90)
+    b=subprocess.run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--cap-add','DAC_OVERRIDE','--cap-add','CHOWN','--cap-add','SETUID','--cap-add','SETGID','--security-opt','no-new-privileges','--memory','768m','--cpus','1','--user','0','--tmpfs','/tmp:rw,size=256m','--mount',f'type=bind,src={root},dst=/proof,readonly','--entrypoint','node','seat-spike:0.1','-e',BROWSER],capture_output=True,timeout=90)
     if b.returncode: raise RuntimeError('isolated_browser_failed')
     browser=json.loads(b.stdout)
     name='backup-proof-'+uuid.uuid4().hex[:12]
@@ -92,7 +108,7 @@ def main():
         if tables<1: raise RuntimeError('empty_database_restore')
     finally:
         subprocess.run(['docker','rm','-f',name],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    receipt={'restoreDirectory':str(dest),'filesVerified':files,'sqliteIntegrityChecks':dbs,'tamperNegativeControl':negative,'postgresTablesRestored':tables,**browser,'network':'none','liveServicesTouched':False}
+    receipt={'restoreDirectory':str(dest),'filesVerified':files,'sqliteIntegrityChecks':dbs,'ownershipAndModesVerified':True,'tamperNegativeControl':negative,'postgresTablesRestored':tables,**browser,'network':'none','liveServicesTouched':False}
     (dest/'RESTORE-VERIFIED.json').write_text(json.dumps(receipt,indent=2)); print(json.dumps(receipt))
 if __name__=='__main__':
     try: main()

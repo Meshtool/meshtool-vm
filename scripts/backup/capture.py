@@ -29,8 +29,13 @@ def capture(out):
     mounts=json.loads(subprocess.check_output(['docker','inspect','seat-rivet','--format','{{json .Mounts}}']))
     if not any(m['Source']==str(SEAT) and m['Destination']=='/data' for m in mounts): raise RuntimeError('seat_mount_changed')
     with tempfile.TemporaryDirectory(prefix='capture-', dir=out.parent) as tmp:
-        dest=pathlib.Path(tmp); entries=[]; checks=[]; ignored=0; dbs=set()
+        dest=pathlib.Path(tmp); entries=[]; directories=[]; checks=[]; ignored=0; dbs=set()
         for label,root in ROOTS.items():
+            for base, dirs, _ in os.walk(root,followlinks=False):
+                dirs[:]=[d for d in dirs if d not in EXCLUDE and not (pathlib.Path(base)/d).is_symlink()]
+                srcdir=pathlib.Path(base); rel=pathlib.Path(label)/srcdir.relative_to(root); meta=srcdir.stat()
+                (dest/rel).mkdir(parents=True,exist_ok=True)
+                directories.append({'path':str(rel),'uid':meta.st_uid,'gid':meta.st_gid,'mode':stat.S_IMODE(meta.st_mode)})
             paths=list(walk(root))
             for src in paths:
                 if src.is_file() and not src.is_symlink():
@@ -43,8 +48,8 @@ def capture(out):
                 if stat.S_ISSOCK(mode): ignored+=1; continue
                 dst.parent.mkdir(parents=True,exist_ok=True)
                 if src.is_symlink():
-                    target=os.readlink(src); dst.symlink_to(target)
-                    entries.append({'path':str(rel),'link':target}); checks.append((src,'link',target)); continue
+                    target=os.readlink(src); dst.symlink_to(target); os.lchown(dst,src.lstat().st_uid,src.lstat().st_gid)
+                    entries.append({'path':str(rel),'link':target,'uid':src.lstat().st_uid,'gid':src.lstat().st_gid}); checks.append((src,'link',target)); continue
                 if not stat.S_ISREG(mode): raise RuntimeError('unsupported_special_file')
                 if src in dbs:
                     # SQLite's online backup includes committed WAL data without mutating the source.
@@ -81,8 +86,8 @@ def capture(out):
                     before=digest(src); shutil.copyfile(src,dst)
                     if digest(dst)!=before or digest(src)!=before: raise RuntimeError('source_changed_retry_required')
                     checks.append((src,'file',before)); kind='stable-file'
-                os.chmod(dst,stat.S_IMODE(mode))
-                entries.append({'path':str(rel),'sha256':digest(dst),'bytes':dst.stat().st_size,'mode':stat.S_IMODE(mode),'method':kind})
+                os.chmod(dst,stat.S_IMODE(mode)); os.chown(dst,src.stat().st_uid,src.stat().st_gid)
+                entries.append({'path':str(rel),'sha256':digest(dst),'bytes':dst.stat().st_size,'uid':dst.stat().st_uid,'gid':dst.stat().st_gid,'mode':stat.S_IMODE(mode),'method':kind})
             # Detect additions/deletions during the copy, including multi-file LevelDB churn.
             if {str(p) for p in walk(root)} != {str(p) for p in paths}: raise RuntimeError('tree_changed_retry_required')
         for src,kind,value in checks:
@@ -98,7 +103,9 @@ def capture(out):
         if first!=second: raise RuntimeError('openshell_workspace_changed')
         p=osdir/'workspace.tar'; p.write_bytes(first)
         entries.append({'path':'openshell-workspace/workspace.tar','sha256':digest(p),'bytes':len(first),'mode':0o600,'method':'double-read-container-tar'})
-        manifest={'version':1,'roots':list(ROOTS),'exclusions':sorted(EXCLUDE|VOLATILE),'ignoredSocketsAndSqliteSidecars':ignored,'entries':entries,'openshell':c,'consistency':'stable per-file + SQLite online backups; not an atomic cross-application transaction'}
+        for d in reversed(directories):
+            os.chown(dest/d['path'],d['uid'],d['gid']); os.chmod(dest/d['path'],d['mode'])
+        manifest={'version':2,'directories':directories,'roots':list(ROOTS),'exclusions':sorted(EXCLUDE|VOLATILE),'ignoredSocketsAndSqliteSidecars':ignored,'entries':entries,'openshell':c,'consistency':'stable per-file + SQLite online backups; not an atomic cross-application transaction'}
         (dest/'manifest.json').write_text(json.dumps(manifest))
         with tarfile.open(out,'w:gz') as tar:
             for child in sorted(dest.iterdir()): tar.add(child,arcname=child.name,recursive=True)

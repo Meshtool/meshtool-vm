@@ -50,8 +50,8 @@ plaintext workspace data or secrets.
 `offsite.mjs` downloads the exact R2 parts and descriptor, verifies hashes and
 GCM authentication, rejects wrong passwords and changed ciphertext, then streams
 decrypted bytes via SSH stdin to `restore.py`. The restore is into a fresh private
-directory, never a live volume. It verifies every file, SQLite integrity, JSON
-state, restores the OpenShell tar, opens Chromium on a copied profile and restores
+directory, never a live volume. It verifies every file, numeric owner/group and permissions, SQLite integrity, JSON
+state, restores the OpenShell tar, opens Chromium as Rivet's normal UID 1000 on a copied profile and restores
 saved cookies in a `--network none` container. It also restores the actual SQL
 dump into an isolated PostgreSQL container with no published ports. A deliberately
 modified restored memory file must fail the same verifier. Test containers contain

@@ -1,4 +1,4 @@
-import importlib.util, io, pathlib, sqlite3, tarfile, tempfile, unittest, json
+import importlib.util, io, pathlib, sqlite3, tarfile, tempfile, unittest, json, os, hashlib
 HERE=pathlib.Path(__file__).parent
 spec=importlib.util.spec_from_file_location('restore',HERE/'restore.py'); restore=importlib.util.module_from_spec(spec); spec.loader.exec_module(restore)
 class RestoreSafety(unittest.TestCase):
@@ -48,4 +48,15 @@ class RestoreSafety(unittest.TestCase):
    r={'source':'20261108T100000Z','remoteDownloadMatched':True,'tamperRejected':True,'browserProfileOpened':True,'postgresTablesRestored':23,'restoreDirectory':str(live)}
    with self.assertRaises(RuntimeError): mod.finalize(r,base)
    self.assertTrue(live.exists())
+ def test_wrong_owner_and_mode_rejected(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=pathlib.Path(d);(root/'seat').mkdir();entries=[]
+   for name in ('memory.json','storage.json','sessions.json','projects.json'):
+    p=root/'seat'/name;p.write_text('{}');p.chmod(0o600)
+    entries.append({'path':'seat/'+name,'sha256':hashlib.sha256(b'{}').hexdigest(),'uid':os.getuid(),'gid':os.getgid(),'mode':0o600,'method':'stable-file'})
+   manifest={'entries':entries};(root/'manifest.json').write_text(json.dumps(manifest));restore.verify(root)
+   (root/'seat/memory.json').chmod(0o644)
+   with self.assertRaisesRegex(RuntimeError,'mode_mismatch'): restore.verify(root)
+   (root/'seat/memory.json').chmod(0o600);entries[0]['uid']=os.getuid()+1;(root/'manifest.json').write_text(json.dumps(manifest))
+   with self.assertRaisesRegex(RuntimeError,'ownership_mismatch'): restore.verify(root)
 if __name__=='__main__': unittest.main()

@@ -27,8 +27,8 @@ try {
  const receiptFile=`${DIR}/${stamp}.verified.json`;
  if(existsSync(receiptFile)&&!process.argv.includes('--force-verify')) {writeFileSync(`${DIR}/last-run.json`,JSON.stringify({ok:true,at:new Date().toISOString(),alreadyVerified:stamp}));console.log(JSON.stringify({alreadyVerified:stamp}));process.exit(0);}
  const remote=`/home/meshtool/own-rails-backups/${stamp}`;
- const plain=ssh(`cd ${remote} && test -f COMPLETE && sha256sum -c SHA256SUMS >/dev/null && tar -czf - runtime_staging.sql.gz seat-workspace.tar.gz capture-receipt.json containers.txt staging-health.json disk.txt SHA256SUMS COMPLETE`);
  const local=`${DIR}/${stamp}.enc`, downloaded=`${DIR}/${stamp}.download.enc`;
+ const plain=existsSync(local)?decrypt(readFileSync(local),pass):ssh(`cd ${remote} && test -f COMPLETE && sha256sum -c SHA256SUMS >/dev/null && tar -czf - runtime_staging.sql.gz seat-workspace.tar.gz capture-receipt.json containers.txt staging-health.json disk.txt SHA256SUMS COMPLETE`);
  const encrypted=existsSync(local)?readFileSync(local):encrypt(plain,pass);
  if(hash(decrypt(encrypted,pass))!==hash(plain)) throw Error('crypto_roundtrip_failed');
  const bad=Buffer.from(encrypted); bad[bad.length-1]^=1;
@@ -45,8 +45,10 @@ try {
   const suffix=`.part${String(index).padStart(3,'0')}`, object=key+suffix;
   const partFile=local+suffix, getFile=downloaded+suffix;
   writeFileSync(partFile,bytes);
-  run(process.execPath,[WRANGLER,'r2','object','put',object,'--file',partFile,'--remote'],{env});
-  run(process.execPath,[WRANGLER,'r2','object','get',object,'--file',getFile,'--remote'],{env});
+  if(!process.argv.includes('--reuse-downloads')) {
+   run(process.execPath,[WRANGLER,'r2','object','put',object,'--file',partFile,'--remote'],{env});
+   run(process.execPath,[WRANGLER,'r2','object','get',object,'--file',getFile,'--remote'],{env});
+  }
   const fetchedPart=readFileSync(getFile);
   if(hash(fetchedPart)!==hash(bytes))throw Error('part_download_mismatch');
   downloadedParts.push(fetchedPart);parts.push({object,bytes:bytes.length,sha256:hash(bytes)});
@@ -55,8 +57,10 @@ try {
  const descriptor={format:'ESTBAK01-split-v1',encryptedBytes:encrypted.length,sha256:hash(encrypted),parts};
  const manifestFile=local+'.manifest.json', manifestGet=downloaded+'.manifest.json';
  writeFileSync(manifestFile,JSON.stringify(descriptor));
- run(process.execPath,[WRANGLER,'r2','object','put',key+'.manifest.json','--file',manifestFile,'--remote'],{env});
- run(process.execPath,[WRANGLER,'r2','object','get',key+'.manifest.json','--file',manifestGet,'--remote'],{env});
+ if(!process.argv.includes('--reuse-downloads')) {
+  run(process.execPath,[WRANGLER,'r2','object','put',key+'.manifest.json','--file',manifestFile,'--remote'],{env});
+  run(process.execPath,[WRANGLER,'r2','object','get',key+'.manifest.json','--file',manifestGet,'--remote'],{env});
+ }
  if(hash(readFileSync(manifestFile))!==hash(readFileSync(manifestGet)))throw Error('remote_manifest_mismatch');
  const fetched=Buffer.concat(downloadedParts);
  if(hash(fetched)!==hash(encrypted)) throw Error('remote_ciphertext_mismatch');

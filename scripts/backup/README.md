@@ -32,7 +32,10 @@ through capture; tree changes fail the run. This is not a globally atomic snapsh
 across applications. The saved browser storage checkpoint remains the same recovery
 fallback used by the seat itself. Nothing is written to source stores.
 
-Backup folders are mode 700, archives 600. No plaintext archive is written to the
+Backup folders are mode 700, archives 600. Plaintext staging archives and dumps
+are removed only after the independent encrypted download and restore succeeds;
+full encrypted copies remain on the host and R2. Failed offsite runs retain their
+private staging data for retry. Historical backups are not changed. No plaintext archive is written to the
 Windows host or sent to R2. The host uses existing guarded vault access and the
 existing ESTBAK01 AES-256-GCM/scrypt implementation and escrowed
 `ESTATE_BACKUP_PASSPHRASE`. Escrow location is recorded in HQ `backup-escrow.json`;
@@ -80,3 +83,11 @@ Run `python3 scripts/backup/test_backup.py` for extraction safety controls and a
 real SQLite WAL backup test. Run `bash ~/own-rails-backup/backup.sh` to capture.
 Run the host `offsite.mjs` with Windows Node to upload/download/restore the latest
 complete capture. Neither command changes live services.
+
+For an interrupted restore after all R2 parts were downloaded, `--reuse-downloads`
+rechecks those existing ciphertext files, descriptor and GCM tag without another
+network transfer. It fails if any part is absent or changed. `--force-verify`
+repeats proof for an already-verified snapshot. Normal scheduled runs always
+upload/download each new snapshot. Encrypted host artifacts permit retries after
+plaintext staging cleanup. Source-code recovery also has an independently encrypted
+Git bundle stored alongside the data backups in R2.

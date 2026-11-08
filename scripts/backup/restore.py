@@ -56,13 +56,11 @@ def verify(root):
 BROWSER=r'''
 const fs=require('fs'), {chromium}=require('playwright');
 (async()=>{
-fs.cpSync('/proof/seat/profile','/tmp/profile',{recursive:true});
-const saved=JSON.parse(fs.readFileSync('/proof/seat/storage.json'));
-const memory=JSON.parse(fs.readFileSync('/proof/seat/memory.json'));
-const owner=fs.statSync('/proof/seat');
-const own=p=>{const st=fs.lstatSync(p);fs.lchownSync(p,owner.uid,owner.gid);if(st.isDirectory())for(const n of fs.readdirSync(p))own(p+'/'+n)};
-own('/tmp/profile');fs.mkdirSync('/tmp/home');fs.chownSync('/tmp/home',owner.uid,owner.gid);process.env.HOME='/tmp/home';process.setgroups([]);process.setgid(owner.gid);process.setuid(owner.uid);
+fs.cpSync('/proof/profile','/tmp/profile',{recursive:true});
+const saved=JSON.parse(fs.readFileSync('/proof/storage.json'));
+const memory=JSON.parse(fs.readFileSync('/proof/memory.json'));
 if(process.getuid()!==1000)throw Error('unexpected_seat_identity');
+fs.mkdirSync('/tmp/home');process.env.HOME='/tmp/home';
 const ctx=await chromium.launchPersistentContext('/tmp/profile',{headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
 await ctx.route('**/*',r=>r.abort());
 if(saved.cookies?.length) await ctx.addCookies(saved.cookies);
@@ -91,7 +89,7 @@ def main():
     verify(root)
     # Unpack OpenShell workspace only into this new proof directory, never a live container.
     extract((root/'openshell-workspace/workspace.tar').read_bytes(),dest/'openshell-restored')
-    b=subprocess.run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--cap-add','DAC_OVERRIDE','--cap-add','CHOWN','--cap-add','SETUID','--cap-add','SETGID','--security-opt','no-new-privileges','--memory','768m','--cpus','1','--user','0','--tmpfs','/tmp:rw,size=256m','--mount',f'type=bind,src={root},dst=/proof,readonly','--entrypoint','node','seat-spike:0.1','-e',BROWSER],capture_output=True,timeout=90)
+    b=subprocess.run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--memory','768m','--cpus','1','--user','1000:1000','--tmpfs','/tmp:rw,size=256m','--mount',f'type=bind,src={root / "seat"},dst=/proof,readonly','--entrypoint','node','seat-spike:0.1','-e',BROWSER],capture_output=True,timeout=90)
     if b.returncode: raise RuntimeError('isolated_browser_failed')
     browser=json.loads(b.stdout)
     name='backup-proof-'+uuid.uuid4().hex[:12]

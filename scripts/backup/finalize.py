@@ -13,6 +13,10 @@ def finalize(r,base=pathlib.Path('/home/meshtool/own-rails-backups')):
  # These are generated test restores, not live data. Their exact encrypted source
  # has been downloaded from R2 and independently restored before this cleanup.
  shutil.rmtree(proof)
+ # Sensitive plaintext is only staging material. Retain encrypted host + R2 copies.
+ for name in ('seat-workspace.tar.gz','runtime_staging.sql.gz'):
+  staged=base/r['source']/name
+  if staged.is_file() and not staged.is_symlink(): staged.unlink()
  pruned=0
  for candidate in base.iterdir():
   if not re.fullmatch(r'\d{8}T\d{6}Z',candidate.name) or candidate.is_symlink() or not candidate.is_dir(): continue

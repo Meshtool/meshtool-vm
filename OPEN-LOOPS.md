@@ -19,3 +19,7 @@ item remains. No actual Windows logout/reboot was forced; the noninteractive bat
 execution, complete transfer/restore proof and required unattended network setting
 were verified without disrupting live work. Daily03:00 Pacific and startup+5min
 remain installed. Earlier UAC installer already succeeded; no outstanding prompt.
+
+## 2026-11-08 11:00 UTC — scheduled run observed (Codex)
+WATCH COMPLETE; fresh upload/restore NOT PERFORMED by this run. The existing03:00 Pacific task fired automatically (no manual trigger), S4U/session0/noninteractive, LastTaskResult0 and fresh wrapper success. It correctly returned alreadyVerified=20261108T100907Z. The full restore receipt stayed at10:20:38UTC; do not count this no-op as a fresh upload/restore pass. All14livecontainers' StartedAt/RestartCount match the pre-watch snapshot. Evidence: scripts/backup/scheduled-watch-20261108.json and host C:/backups/meshtool-recovery/scheduled-watch-20261108.json. Owner codex-backup-watch, claim669. No service/config/schedule changes made while watching.
+Next new VM capture:2026-11-09 09:30UTC (01:30 Pacific), next offsite task11:00UTC (03:00 Pacific). That future fresh scheduled capture/upload/restore has not been observed; earlier full noninteractive proof remains valid. This watch ended at the requested next task's terminal result; no background automation was added or continuing watch promised.

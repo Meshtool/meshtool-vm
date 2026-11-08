@@ -1,0 +1,61 @@
+{
+  "observedAt": "2026-11-08T11:00:04.489Z",
+  "scheduledForUtc": "2026-11-08T11:00:00.000Z",
+  "manuallyTriggered": false,
+  "task": {
+    "State": "Ready",
+    "LogonType": "S4U",
+    "LastRunUtc": "2026-11-08T11:00:00.0000000Z",
+    "LastResult": 0,
+    "NextRunUtc": "2026-11-09T11:00:00.0000000Z"
+  },
+  "scheduledExecutionPassed": true,
+  "uploadAndRestoreRan": false,
+  "outcome": "already_verified_skip",
+  "lastRun": {
+    "ok": true,
+    "at": "2026-11-08T11:00:01.095Z",
+    "alreadyVerified": "20261108T100907Z"
+  },
+  "execution": {
+    "startedAt": "2026-11-08T11:00:00.8850325Z",
+    "user": "solidity-slop\\vipth",
+    "sessionId": 0,
+    "userInteractive": false,
+    "batchLogon": true,
+    "interactiveLogon": false,
+    "fullVerification": false,
+    "ok": true,
+    "completedAt": "2026-11-08T11:00:01.1846439Z",
+    "source": "20261108T100907Z",
+    "restoreVerifiedAt": "2026-11-08T10:20:38.348Z",
+    "object": "r2://estate-backup/meshtool-vm/20261108T100907Z-c58906b6ddf21df3.enc.manifest.json",
+    "filesVerified": 3422,
+    "browserUid": 1000,
+    "postgresTablesRestored": 23
+  },
+  "restore": {
+    "verifiedAt": "2026-11-08T10:20:38.348Z",
+    "source": "20261108T100907Z",
+    "object": "r2://estate-backup/meshtool-vm/20261108T100907Z-c58906b6ddf21df3.enc.manifest.json",
+    "parts": 4,
+    "encryptedBytes": 371808845,
+    "encryptedSha256": "c58906b6ddf21df319c8ef7bf0b94816e892de900ffd7108865a43dc2fb3fff9",
+    "remoteDownloadMatched": true,
+    "wrongKeyRejected": true,
+    "tamperRejected": true,
+    "restoreDirectory": "/home/meshtool/own-rails-backups/restore-proof-20261108T102001Z-ab5e952a",
+    "filesVerified": 3422,
+    "sqliteIntegrityChecks": 3,
+    "ownershipAndModesVerified": true,
+    "tamperNegativeControl": true,
+    "postgresTablesRestored": 23,
+    "browserProfileOpened": true,
+    "browserUid": 1000,
+    "savedCookiesRestored": 1,
+    "memoryJsonReadable": true,
+    "network": "none",
+    "liveServicesTouched": false
+  },
+  "liveContainersUnchanged": 14
+}

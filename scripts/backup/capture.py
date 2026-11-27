@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fail-closed online file capture. Never stops or writes to source services."""
-import hashlib, json, os, pathlib, shutil, sqlite3, stat, subprocess, sys, tarfile, tempfile, time
+import hashlib, json, os, pathlib, re, shutil, sqlite3, stat, subprocess, sys, tarfile, tempfile, time
 HOME = pathlib.Path('/home/meshtool')
 SEAT = pathlib.Path('/var/lib/docker/volumes/seat-rivet-data/_data')
 ROOTS = {'seat': SEAT, **{p: HOME/p for p in ('projects','frank-deck-work','seat-spike','shared','own-rails-staging','own-rails-backup')}}
@@ -93,19 +93,26 @@ def capture(out):
         for src,kind,value in checks:
             if (os.readlink(src) if kind=='link' else digest(src))!=value: raise RuntimeError('source_changed_retry_required')
         # OpenShell's work is in a writable container layer, not a volume.
+        # Capture EVERY seat (one workspace per seat); zero seats is still an inventory failure.
         names=subprocess.check_output(['docker','ps','--format','{{.Names}}'],text=True).splitlines()
-        seats=[n for n in names if n.startswith('openshell-default--mesh-seat-') and not n.endswith('-supervisor')]
-        if len(seats)!=1: raise RuntimeError('openshell_seat_inventory_changed')
-        c=seats[0]; osdir=dest/'openshell-workspace'; osdir.mkdir()
-        # Reading twice and requiring identical bytes detects a moving container workspace.
-        args=['docker','exec',c,'tar','--sort=name','-C','/','-cf','-','sandbox','home/ubuntu']
-        first=subprocess.check_output(args); second=subprocess.check_output(args)
-        if first!=second: raise RuntimeError('openshell_workspace_changed')
-        p=osdir/'workspace.tar'; p.write_bytes(first)
-        entries.append({'path':'openshell-workspace/workspace.tar','sha256':digest(p),'bytes':len(first),'mode':0o600,'method':'double-read-container-tar'})
+        seats=sorted(n for n in names if n.startswith('openshell-default--mesh-seat-') and not n.endswith('-supervisor'))
+        if not seats: raise RuntimeError('openshell_seat_inventory_changed')
+        osdir=dest/'openshell-workspace'; osdir.mkdir()
+        captured={}
+        for c in seats:
+            # Container name is openshell-default--<seat>-<uuid>; the label drops the uuid.
+            label=re.sub(r'-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$','',c[len('openshell-default--'):])
+            # Reading twice and requiring identical bytes detects a moving container workspace.
+            args=['docker','exec',c,'tar','--sort=name','-C','/','-cf','-','sandbox','home/ubuntu']
+            first=subprocess.check_output(args); second=subprocess.check_output(args)
+            if first!=second: raise RuntimeError('openshell_workspace_changed')
+            seatdir=osdir/label; seatdir.mkdir()
+            p=seatdir/'workspace.tar'; p.write_bytes(first)
+            entries.append({'path':f'openshell-workspace/{label}/workspace.tar','sha256':digest(p),'bytes':len(first),'mode':0o600,'method':'double-read-container-tar'})
+            captured[label]=c
         for d in reversed(directories):
             os.chown(dest/d['path'],d['uid'],d['gid']); os.chmod(dest/d['path'],d['mode'])
-        manifest={'version':2,'directories':directories,'roots':list(ROOTS),'exclusions':sorted(EXCLUDE|VOLATILE),'ignoredSocketsAndSqliteSidecars':ignored,'entries':entries,'openshell':c,'consistency':'stable per-file + SQLite online backups; not an atomic cross-application transaction'}
+        manifest={'version':2,'directories':directories,'roots':list(ROOTS),'exclusions':sorted(EXCLUDE|VOLATILE),'ignoredSocketsAndSqliteSidecars':ignored,'entries':entries,'openshell':captured,'consistency':'stable per-file + SQLite online backups; not an atomic cross-application transaction'}
         (dest/'manifest.json').write_text(json.dumps(manifest))
         with tarfile.open(out,'w:gz') as tar:
             for child in sorted(dest.iterdir()): tar.add(child,arcname=child.name,recursive=True)

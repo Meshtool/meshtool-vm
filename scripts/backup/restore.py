@@ -87,8 +87,27 @@ def main():
         else: raise RuntimeError('negative_control_did_not_fail')
     finally: m.write_bytes(old)
     verify(root)
-    # Unpack OpenShell workspace only into this new proof directory, never a live container.
-    extract((root/'openshell-workspace/workspace.tar').read_bytes(),dest/'openshell-restored')
+    # Unpack OpenShell workspaces only into this new proof directory, never a live container.
+    # New-format backups hold one workspace per seat at openshell-workspace/<label>/workspace.tar
+    # (manifest 'openshell' is a dict label -> container); old backups hold a single workspace
+    # at openshell-workspace/workspace.tar.
+    manifest = json.loads((root/'manifest.json').read_text())
+    seats = manifest.get('openshell')
+    restored_seats = {}
+    if isinstance(seats, dict) and seats:
+        (dest/'openshell-restored').mkdir(mode=0o700)
+        for label in sorted(seats):
+            data = (root/'openshell-workspace'/label/'workspace.tar').read_bytes()
+            with tarfile.open(fileobj=io.BytesIO(data), mode='r:*') as t:
+                restored_seats[label] = len(t.getmembers())
+            extract(data, dest/'openshell-restored'/label)
+    elif (root/'openshell-workspace'/'workspace.tar').exists():
+        data = (root/'openshell-workspace'/'workspace.tar').read_bytes()
+        with tarfile.open(fileobj=io.BytesIO(data), mode='r:*') as t:
+            restored_seats['legacy'] = len(t.getmembers())
+        extract(data, dest/'openshell-restored')
+    else:
+        raise RuntimeError('openshell_workspace_missing')
     b=subprocess.run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--memory','768m','--cpus','1','--user','1000:1000','--tmpfs','/tmp:rw,size=256m','--mount',f'type=bind,src={root / "seat"},dst=/proof,readonly','--entrypoint','node','seat-spike:0.1','-e',BROWSER],capture_output=True,timeout=90)
     if b.returncode: raise RuntimeError('isolated_browser_failed')
     browser=json.loads(b.stdout)
@@ -106,7 +125,7 @@ def main():
         if tables<1: raise RuntimeError('empty_database_restore')
     finally:
         subprocess.run(['docker','rm','-f',name],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    receipt={'restoreDirectory':str(dest),'filesVerified':files,'sqliteIntegrityChecks':dbs,'ownershipAndModesVerified':True,'tamperNegativeControl':negative,'postgresTablesRestored':tables,**browser,'network':'none','liveServicesTouched':False}
+    receipt={'restoreDirectory':str(dest),'filesVerified':files,'sqliteIntegrityChecks':dbs,'ownershipAndModesVerified':True,'tamperNegativeControl':negative,'postgresTablesRestored':tables,'openshellSeatsRestored':restored_seats,**browser,'network':'none','liveServicesTouched':False}
     (dest/'RESTORE-VERIFIED.json').write_text(json.dumps(receipt,indent=2)); print(json.dumps(receipt))
 if __name__=='__main__':
     try: main()
